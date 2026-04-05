@@ -1,0 +1,28 @@
+{
+  "name": "pi-context",
+  "version": "0.1.0",
+  "description": "Two pi extensions: SSH context parity (SYSTEM.md, AGENTS.md, skills over SSH) and a link-following context graph (agents.md) for .pi, .claude, or .agent projects",
+  "license": "MIT",
+  "pi": {
+    "extensions": [
+      "./extensions/ssh-context.ts",
+      "./extensions/context-graph.ts"
+    ]
+  },
+  "scripts": {
+    "test": "vitest --run"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/zeflq/pi-ssh-context.git"
+  },
+  "keywords": [],
+  "author": "",
+  "peerDependencies": {
+    "@mariozechner/pi-coding-agent": "*"
+  },
+  "devDependencies": {
+    "typescript": "^6.0.2",
+    "vitest": "^4.1.2"
+  }
+}

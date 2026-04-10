@@ -2,7 +2,7 @@ import type { FsOps } from "./fs-ops.js";
 import { extractMarkdownLinks, parseFrontmatter } from "./markdown.js";
 
 /** Config directory names tried in order. */
-const CONFIG_DIR_NAMES = [".pi", ".claude", ".agent"];
+const CONFIG_DIR_NAMES = [".pi", ".claude", ".agents"];
 
 /** Root filename match (case-insensitive). */
 const ROOT_FILE_LOWER = "agents.md";

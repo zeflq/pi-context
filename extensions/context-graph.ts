@@ -4,7 +4,7 @@
  * Loads <config-dir>/agents.md fully, then recursively follows markdown links,
  * injecting linked files as stubs so the LLM can pull them on demand.
  *
- * Supported config dirs (tried in order): .pi  .claude  .agent
+ * Supported config dirs (tried in order): .pi  .claude  .agents
  * Works both locally and over SSH.
  */
 

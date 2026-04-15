@@ -34,7 +34,7 @@ Pi's native `AGENTS.md` / `CLAUDE.md` mechanism loads files flat into the system
 Instead, you create a **context graph** rooted at `<config-dir>/agents.md`:
 
 ```
-.pi/               # or .claude/ or .agent/
+.pi/               # or .claude/ or .agents/
 ├── agents.md      ← entry point, always fully loaded
 ├── git.md         ← linked from agents.md → stub only
 ├── ssh.md         ← linked from agents.md → stub only
@@ -96,4 +96,7 @@ src/
   ssh.ts             # Shared SSH flag parsing and state resolution
   markdown.ts        # Shared frontmatter parsing and link extraction
   loader.ts          # Shared file discovery and loading logic
+test/
+  loader.test.ts     # Unit tests for loader utilities
+  context-graph.test.ts  # Integration tests for context-graph extension
 ```

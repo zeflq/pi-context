@@ -79,7 +79,7 @@ export async function walkUpContextFiles(
     for (const dir of searchDirs) {
       for (const filename of CONTEXT_FILE_NAMES) {
         const path = fs.join(dir, filename);
-        if (seenPaths.has(path)) break;
+        if (seenPaths.has(path)) continue;
         const content = await fs.read(path);
         if (content !== null) {
           levelFiles.push({ path, content });
@@ -214,8 +214,8 @@ export async function loadRemoteSkills(
       continue;
     }
 
-    // Assume directory — recurse (SKILL.md check above handles skill roots)
-    if (!entry.includes(".")) {
+    // Treat as directory if read returns null (directories aren't readable as text).
+    if (await fs.read(fullPath) === null) {
       skills.push(...await loadRemoteSkills(fs, fullPath, allowRootMd));
     }
   }
@@ -261,8 +261,8 @@ export async function collectLinkedFiles(
   return result;
 }
 
-export function formatRootContent(file: LoadedFile): string {
-  return `## Agent Context\n\n${file.content!.trim()}`;
+export function formatRootContent(file: LoadedFile & { content: string }): string {
+  return `## Agent Context\n\n${file.content.trim()}`;
 }
 
 export function formatLinkedFilesBlock(files: LoadedFile[]): string {

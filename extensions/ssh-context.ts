@@ -8,7 +8,7 @@
  *                        Layer 1: AGENTS.md / CLAUDE.md walk-up
  */
 
-import type { ExtensionApi } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { join as posixJoin } from "node:path/posix";
 import { sshExec, sshFs } from "../src/fs-ops.js";
 import { readSshFlag, resolveSshState, type SshState } from "../src/ssh.js";
@@ -19,7 +19,7 @@ import {
   readFileFromDir,
 } from "../src/loader.js";
 
-export default function (pi: ExtensionApi) {
+export default function (pi: ExtensionAPI) {
   const sshFlag = readSshFlag();
   let sshState: SshState | null = null;
   const sshStateReady = sshFlag
@@ -37,7 +37,7 @@ export default function (pi: ExtensionApi) {
   // debug panel and are registered as /skill:name commands.
   // For localhost paths are identical on disk and load natively.
   // For true remote hosts pi silently skips non-existent local paths.
-  pi.on("resources_discover", async () => {
+  pi.on("resources_discover", async (_event, _ctx) => {
     await sshStateReady;
     if (!sshState) return;
 
@@ -60,7 +60,7 @@ export default function (pi: ExtensionApi) {
     return { skillPaths };
   });
 
-  pi.on("before_agent_start", async (event: { systemPrompt: string }) => {
+  pi.on("before_agent_start", async (event, _ctx) => {
     await sshStateReady;
     if (!sshState) return;
 

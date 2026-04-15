@@ -144,6 +144,16 @@ describe("collectLinkedFiles", () => {
     // only agents.md itself, missing.md skipped
     expect(result.map(r => r.filePath)).toEqual(["/project/.pi/agents.md"]);
   });
+
+  it("detects raw .md references without markdown link syntax", async () => {
+    const fs = makeFsOps({
+      "/project/AGENTS.md": "## Review\nwhen making a review load -> .pi/REVIEW.md",
+      "/project/.pi/REVIEW.md": "---\ndescription: Review checklist.\n---\n# Review",
+    });
+    const visited = new Set<string>();
+    const result = await collectLinkedFiles(fs, "/project/AGENTS.md", visited, 0, 10);
+    expect(result.map(r => r.filePath)).toContain("/project/.pi/REVIEW.md");
+  });
 });
 
 // — collectAncestorSkillDirs —

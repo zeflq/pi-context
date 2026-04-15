@@ -16,3 +16,9 @@
 - [x] Check if `findAgentsDir` and `findRootFile` are used anywhere else; if not, remove them from `loader.ts` — kept: both are exported and tested
 - [x] Check if `ROOT_FILE_LOWER = "agents.md"` and its case-insensitive matching logic in `loader.ts` becomes dead code — kept: still used by `findAgentsDir` / `findRootFile`
 - [x] Fix stale test: `.agent` → `.agents` to match `CONFIG_DIR_NAMES`
+
+## To fix (`extensions/context-graph.ts`)
+
+- [x] Make layer-2 independent from file discovery: read root file paths/content from already injected system prompt context (no `walkUpContextFiles()` inside `context-graph`)
+- [x] Avoid stale cwd: use handler/runtime cwd (`ctx.cwd`) instead of capturing `process.cwd()` at extension initialization
+- [x] Make SSH state resolution failure-safe: guard `resolveSshState()` / `sshStateReady` with error handling and degrade gracefully

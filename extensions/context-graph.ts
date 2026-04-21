@@ -26,6 +26,40 @@ export function extractContextPathsFromSystemPrompt(systemPrompt: string): strin
   return paths;
 }
 
+/**
+ * Extracts both path and content for each context file injected into the
+ * system prompt as `## /path/to/file\n\n<content>` sections.
+ * Avoids re-reading files via SSH / localFs when the content is already present.
+ */
+export function extractContextFilesFromSystemPrompt(
+  systemPrompt: string,
+): Array<{ path: string; content: string }> {
+  const files: Array<{ path: string; content: string }> = [];
+  const lines = systemPrompt.split(/\r?\n/);
+  let currentPath: string | null = null;
+  const currentContent: string[] = [];
+
+  const flush = () => {
+    if (currentPath !== null) {
+      const content = currentContent.join("\n").trim();
+      if (content) files.push({ path: currentPath, content });
+    }
+    currentContent.length = 0;
+  };
+
+  for (const line of lines) {
+    const m = line.match(/^## (.+)$/);
+    if (m && looksLikeFilePath(m[1].trim())) {
+      flush();
+      currentPath = m[1].trim();
+    } else if (currentPath !== null) {
+      currentContent.push(line);
+    }
+  }
+  flush();
+  return files;
+}
+
 export default function (pi: ExtensionAPI) {
   const sshFlag = readSshFlag();
   let sshState: SshState | null = null;
@@ -41,16 +75,9 @@ export default function (pi: ExtensionAPI) {
 
     const fs = sshState ? sshFs(sshState.remote) : localFs;
 
-    const rootPaths = extractContextPathsFromSystemPrompt(event.systemPrompt);
-    if (rootPaths.length === 0) return;
-
-    const rootFiles = (
-      await Promise.all(rootPaths.map(async (path) => {
-        const content = await fs.read(path);
-        return content !== null ? { path, content } : null;
-      }))
-    ).filter((f): f is { path: string; content: string } => f !== null);
-
+    // Use content already present in the system prompt — avoids re-reading
+    // root files via SSH (which can fail on Windows) and reduces SSH traffic.
+    const rootFiles = extractContextFilesFromSystemPrompt(event.systemPrompt);
     if (rootFiles.length === 0) return;
 
     const visited = new Set(rootFiles.map((f) => f.path));

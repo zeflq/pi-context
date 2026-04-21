@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import contextGraph, { extractContextPathsFromSystemPrompt } from "../extensions/context-graph.js";
+import contextGraph, { extractContextPathsFromSystemPrompt, extractContextFilesFromSystemPrompt } from "../extensions/context-graph.js";
 
 type BeforeAgentStartHandler = (event: { systemPrompt: string }, ctx: { cwd: string }) => Promise<{ systemPrompt: string } | undefined>;
 
@@ -55,6 +55,53 @@ describe("extractContextPathsFromSystemPrompt", () => {
     const paths = extractContextPathsFromSystemPrompt(prompt);
     expect(paths).toHaveLength(1);
     expect(paths[0]).toBe("/repo/AGENTS.md");
+  });
+});
+
+describe("extractContextFilesFromSystemPrompt", () => {
+  it("extracts path and content from ## /path sections", () => {
+    const prompt = [
+      "Base system",
+      "",
+      "## /repo/AGENTS.md",
+      "",
+      "Some content here",
+      "[link](file.md)",
+      "",
+      "## /repo/.pi/AGENTS.md",
+      "Nested content",
+    ].join("\n");
+    const files = extractContextFilesFromSystemPrompt(prompt);
+    expect(files).toHaveLength(2);
+    expect(files[0].path).toBe("/repo/AGENTS.md");
+    expect(files[0].content).toContain("Some content here");
+    expect(files[0].content).toContain("[link](file.md)");
+    expect(files[1].path).toBe("/repo/.pi/AGENTS.md");
+    expect(files[1].content).toBe("Nested content");
+  });
+
+  it("treats ## headings within content that are not file paths as content", () => {
+    const prompt = [
+      "## /repo/AGENTS.md",
+      "",
+      "## Overview",
+      "Not a file path heading",
+    ].join("\n");
+    const files = extractContextFilesFromSystemPrompt(prompt);
+    expect(files).toHaveLength(1);
+    expect(files[0].content).toContain("## Overview");
+    expect(files[0].content).toContain("Not a file path heading");
+  });
+
+  it("returns empty array when no file path headings found", () => {
+    expect(extractContextFilesFromSystemPrompt("## Overview\nsome content")).toHaveLength(0);
+  });
+
+  it("handles Windows CRLF line endings", () => {
+    const prompt = "## /repo/AGENTS.md\r\nsome content\r\n";
+    const files = extractContextFilesFromSystemPrompt(prompt);
+    expect(files).toHaveLength(1);
+    expect(files[0].content).toBe("some content");
   });
 });
 

@@ -3,7 +3,7 @@ import type { FsOps } from "../src/fs-ops.js";
 import {
   findAgentsDir,
   findRootFile,
-  collectLinkedFiles,
+  collectConfigDirFiles,
   collectAncestorSkillDirs,
   mergeSkills,
   loadRemoteSkills,
@@ -77,82 +77,97 @@ describe("findAgentsDir", () => {
   });
 });
 
-// — collectLinkedFiles —
+// — collectConfigDirFiles —
 
-describe("collectLinkedFiles", () => {
-  it("collects a single linked file as stub", async () => {
+describe("collectConfigDirFiles", () => {
+  it("collects .md files with descriptions from .pi/", async () => {
     const fs = makeFsOps({
-      "/project/.pi/git.md": "---\ndescription: Git conventions.\n---\n# Git",
+      "/project/.pi/review.md": "---\ndescription: Review playbook.\n---\n# Review",
+      "/project/.pi/deploy.md": "---\ndescription: Deployment runbook.\n---\n# Deploy",
     });
-    const visited = new Set(["/project/.pi/agents.md"]);
-    const result = await collectLinkedFiles(fs, "/project/.pi/git.md", visited, 0, 10);
-    expect(result).toHaveLength(1);
-    expect(result[0].filePath).toBe("/project/.pi/git.md");
-    expect(result[0].description).toBe("Git conventions.");
+    const visited = new Set(["/project/AGENTS.md"]);
+    const result = await collectConfigDirFiles(fs, "/project", visited);
+    expect(result).toHaveLength(2);
+    expect(result.map(r => r.filePath)).toContain("/project/.pi/review.md");
+    expect(result.map(r => r.filePath)).toContain("/project/.pi/deploy.md");
     expect(result[0].content).toBeNull(); // stub only
   });
 
-  it("recurses into linked files", async () => {
+  it("skips files without a description field", async () => {
     const fs = makeFsOps({
-      "/project/.pi/git.md": "---\ndescription: Git.\n---\n[Deploy](deploy.md)",
-      "/project/.pi/deploy.md": "---\ndescription: Deploy.\n---\n# Deploy",
-    });
-    const visited = new Set(["/project/.pi/agents.md"]);
-    const result = await collectLinkedFiles(fs, "/project/.pi/git.md", visited, 0, 10);
-    expect(result).toHaveLength(2);
-    expect(result.map(r => r.filePath)).toContain("/project/.pi/deploy.md");
-  });
-
-  it("skips already-visited files (cycle detection)", async () => {
-    const fs = makeFsOps({
-      "/project/.pi/a.md": "---\ndescription: A.\n---\n[B](b.md)",
-      "/project/.pi/b.md": "---\ndescription: B.\n---\n[A](a.md)",
-    });
-    const visited = new Set(["/project/.pi/agents.md", "/project/.pi/a.md"]);
-    const result = await collectLinkedFiles(fs, "/project/.pi/b.md", visited, 0, 10);
-    // b.md collected, a.md skipped (already visited)
-    expect(result.map(r => r.filePath)).toEqual(["/project/.pi/b.md"]);
-  });
-
-  it("respects maxDepth", async () => {
-    const fs = makeFsOps({
-      "/project/.pi/a.md": "---\ndescription: A.\n---\n[B](b.md)",
-      "/project/.pi/b.md": "---\ndescription: B.\n---\n# B",
+      "/project/.pi/nodesc.md": "# No frontmatter",
+      "/project/.pi/withdesc.md": "---\ndescription: Has one.\n---\n# Content",
     });
     const visited = new Set<string>();
-    // maxDepth=0 means nothing collected at depth 0
-    const result = await collectLinkedFiles(fs, "/project/.pi/a.md", visited, 0, 0);
+    const result = await collectConfigDirFiles(fs, "/project", visited);
+    expect(result).toHaveLength(1);
+    expect(result[0].filePath).toBe("/project/.pi/withdesc.md");
+  });
+
+  it("skips files already in visited set", async () => {
+    const fs = makeFsOps({
+      "/project/.pi/review.md": "---\ndescription: Review.\n---\n",
+    });
+    const visited = new Set(["/project/.pi/review.md"]);
+    const result = await collectConfigDirFiles(fs, "/project", visited);
     expect(result).toHaveLength(0);
   });
 
-  it("handles missing description gracefully (empty stub)", async () => {
+  it("scans .claude/ and .agents/ as well", async () => {
     const fs = makeFsOps({
-      "/project/.pi/nodesc.md": "# No frontmatter here",
+      "/project/.claude/style.md": "---\ndescription: Style guide.\n---\n",
+      "/project/.agents/ops.md": "---\ndescription: Ops guide.\n---\n",
     });
     const visited = new Set<string>();
-    const result = await collectLinkedFiles(fs, "/project/.pi/nodesc.md", visited, 0, 10);
+    const result = await collectConfigDirFiles(fs, "/project", visited);
+    expect(result.map(r => r.filePath)).toContain("/project/.claude/style.md");
+    expect(result.map(r => r.filePath)).toContain("/project/.agents/ops.md");
+  });
+
+  it("returns empty array when config dirs are absent", async () => {
+    const fs = makeFsOps({});
+    const visited = new Set<string>();
+    const result = await collectConfigDirFiles(fs, "/project", visited);
+    expect(result).toHaveLength(0);
+  });
+
+  it("is case-insensitive for .md extension", async () => {
+    const fs = makeFsOps({
+      "/project/.pi/README.MD": "---\ndescription: Upper ext.\n---\n",
+    });
+    const visited = new Set<string>();
+    const result = await collectConfigDirFiles(fs, "/project", visited);
     expect(result).toHaveLength(1);
-    expect(result[0].description).toBe("");
   });
 
-  it("skips non-existent linked files silently", async () => {
+  it("skips the skills/ subdirectory", async () => {
     const fs = makeFsOps({
-      "/project/.pi/agents.md": "---\ndescription: Root.\n---\n[Missing](missing.md)",
+      "/project/.pi/skills/deploy/SKILL.md": "---\ndescription: Deploy skill.\n---\n",
+      "/project/.pi/notes.md": "---\ndescription: Project notes.\n---\n",
     });
     const visited = new Set<string>();
-    const result = await collectLinkedFiles(fs, "/project/.pi/agents.md", visited, 0, 10);
-    // only agents.md itself, missing.md skipped
-    expect(result.map(r => r.filePath)).toEqual(["/project/.pi/agents.md"]);
+    const result = await collectConfigDirFiles(fs, "/project", visited);
+    expect(result).toHaveLength(1);
+    expect(result[0].filePath).toBe("/project/.pi/notes.md");
   });
 
-  it("detects raw .md references without markdown link syntax", async () => {
+  it("recurses into subdirectories", async () => {
     const fs = makeFsOps({
-      "/project/AGENTS.md": "## Review\nwhen making a review load -> .pi/REVIEW.md",
-      "/project/.pi/REVIEW.md": "---\ndescription: Review checklist.\n---\n# Review",
+      "/project/.pi/subdir/nested.md": "---\ndescription: Nested doc.\n---\n",
     });
     const visited = new Set<string>();
-    const result = await collectLinkedFiles(fs, "/project/AGENTS.md", visited, 0, 10);
-    expect(result.map(r => r.filePath)).toContain("/project/.pi/REVIEW.md");
+    const result = await collectConfigDirFiles(fs, "/project", visited);
+    expect(result).toHaveLength(1);
+    expect(result[0].filePath).toBe("/project/.pi/subdir/nested.md");
+  });
+
+  it("adds discovered files to visited to avoid duplicates across callers", async () => {
+    const fs = makeFsOps({
+      "/project/.pi/review.md": "---\ndescription: Review.\n---\n",
+    });
+    const visited = new Set<string>();
+    await collectConfigDirFiles(fs, "/project", visited);
+    expect(visited.has("/project/.pi/review.md")).toBe(true);
   });
 });
 

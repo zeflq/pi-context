@@ -1,10 +1,11 @@
 /**
- * Link-following context graph extension (layer 2).
+ * Context file auto-discovery extension (layer 2).
  *
- * Reads context file paths already present in the current system prompt
- * (typically injected by ssh-context under "# Project Context"), reads each
- * file from disk, recursively follows markdown links, and injects linked-file
- * stubs so the LLM can pull them on demand.
+ * Reads context file paths already present in the system prompt (injected by
+ * ssh-context or pi's native loader), scans their project's config dirs
+ * (.pi/, .claude/, .agents/) for .md files with a `description` frontmatter
+ * field, and injects a <context-files> block so the agent can load them on
+ * demand via the read tool.
  *
  * Works both locally and over SSH.
  */
@@ -12,19 +13,8 @@
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { localFs, sshFs } from "../src/fs-ops.js";
 import { readSshFlag, resolveSshState, type SshState } from "../src/ssh.js";
-import { extractMarkdownLinks, looksLikeFilePath } from "../src/markdown.js";
-import { formatLinkedFilesBlock, collectLinkedFiles, type LoadedFile } from "../src/loader.js";
-
-export function extractContextPathsFromSystemPrompt(systemPrompt: string): string[] {
-  const paths: string[] = [];
-  for (const line of systemPrompt.split(/\r?\n/)) {
-    const match = line.match(/^##\s+(.+)$/);
-    if (match && looksLikeFilePath(match[1])) {
-      paths.push(match[1].trim());
-    }
-  }
-  return paths;
-}
+import { looksLikeFilePath } from "../src/markdown.js";
+import { formatContextFilesBlock, collectConfigDirFiles, CONFIG_DIR_NAMES, type LoadedFile } from "../src/loader.js";
 
 /**
  * Extracts both path and content for each context file injected into the
@@ -82,24 +72,26 @@ export default function (pi: ExtensionAPI) {
 
     const visited = new Set(rootFiles.map((f) => f.path));
 
-    const linkedNested = await Promise.all(
-      rootFiles.map((file) =>
-        Promise.all(
-          extractMarkdownLinks(file.content).map(async (link) => {
-            const linkedPath = fs.join(fs.dirname(file.path), link);
-            if (await fs.exists(linkedPath)) {
-              return collectLinkedFiles(fs, linkedPath, visited, 0, 10);
-            }
-            return [];
-          })
+    // If AGENTS.md lives inside a config dir (e.g. /project/.pi/AGENTS.md),
+    // use the parent as the project root so we scan /project/.pi/ correctly.
+    // If it lives directly in the project root (e.g. /project/AGENTS.md),
+    // use that directory as-is.
+    const projectRoot = (dir: string) => {
+      const base = dir.split("/").pop() ?? "";
+      return CONFIG_DIR_NAMES.includes(base) ? fs.dirname(dir) : dir;
+    };
+
+    const linked: LoadedFile[] = (
+      await Promise.all(
+        rootFiles.map((file) =>
+          collectConfigDirFiles(fs, projectRoot(fs.dirname(file.path)), visited)
         )
       )
-    );
-    const linked: LoadedFile[] = linkedNested.flat(2);
+    ).flat();
 
-    const linkedBlock = formatLinkedFilesBlock(linked);
-    if (!linkedBlock) return;
+    const block = formatContextFilesBlock(linked);
+    if (!block) return;
 
-    return { systemPrompt: `${event.systemPrompt}\n\n${linkedBlock}` };
+    return { systemPrompt: `${event.systemPrompt}\n\n${block}` };
   });
 }

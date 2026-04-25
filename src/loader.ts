@@ -1,5 +1,5 @@
 import type { FsOps } from "./fs-ops.js";
-import { extractMarkdownLinks, parseFrontmatter } from "./markdown.js";
+import { parseFrontmatter } from "./markdown.js";
 
 /** Config directory names tried in order. */
 export const CONFIG_DIR_NAMES = [".pi", ".claude", ".agents"];
@@ -237,32 +237,51 @@ export async function loadRootFile(fs: FsOps, filePath: string): Promise<LoadedF
   return { filePath, description: fromMatter["description"] ?? "", content: raw };
 }
 
-export async function collectLinkedFiles(
+/**
+ * Recursively scans a directory for .md files with a description frontmatter
+ * field. Skips hidden entries (starting with "."), node_modules, and skills/.
+ * Files already in `visited` are skipped (deduplication across callers).
+ */
+async function scanDirForFiles(
   fs: FsOps,
-  filePath: string,
+  dir: string,
   visited: Set<string>,
-  depth: number,
-  maxDepth: number
-): Promise<LoadedFile[]> {
-  if (depth >= maxDepth || visited.has(filePath)) return [];
-  visited.add(filePath);
-
-  const raw = await fs.read(filePath);
-  if (!raw) return [];
-
-  const { fromMatter } = parseFrontmatter(raw);
-  const basedir = fs.dirname(filePath);
-  const result: LoadedFile[] = [
-    { filePath, description: fromMatter["description"] ?? "", content: null },
-  ];
-
-  for (const link of extractMarkdownLinks(raw)) {
-    const linked = fs.join(basedir, link);
-    if (await fs.exists(linked)) {
-      result.push(...await collectLinkedFiles(fs, linked, visited, depth + 1, maxDepth));
+  result: LoadedFile[],
+): Promise<void> {
+  const entries = await fs.list(dir);
+  for (const entry of entries) {
+    if (entry.startsWith(".") || entry === "node_modules" || entry === "skills") continue;
+    const fullPath = fs.join(dir, entry);
+    if (entry.toLowerCase().endsWith(".md")) {
+      if (visited.has(fullPath)) continue;
+      const raw = await fs.read(fullPath);
+      if (!raw) continue;
+      const { fromMatter } = parseFrontmatter(raw);
+      const description = fromMatter["description"]?.trim();
+      if (!description) continue;
+      visited.add(fullPath);
+      result.push({ filePath: fullPath, description, content: null });
+    } else if (await fs.read(fullPath) === null) {
+      // read returns null for directories — recurse
+      await scanDirForFiles(fs, fullPath, visited, result);
     }
   }
+}
 
+/**
+ * Scans config subdirs (.pi, .claude, .agents) of rootDir for .md files that
+ * have a description frontmatter field. Recurses into subdirectories.
+ * Files already in `visited` are skipped (deduplication across root files).
+ */
+export async function collectConfigDirFiles(
+  fs: FsOps,
+  rootDir: string,
+  visited: Set<string>,
+): Promise<LoadedFile[]> {
+  const result: LoadedFile[] = [];
+  for (const name of CONFIG_DIR_NAMES) {
+    await scanDirForFiles(fs, fs.join(rootDir, name), visited, result);
+  }
   return result;
 }
 
@@ -270,25 +289,21 @@ export function formatRootContent(file: LoadedFile & { content: string }): strin
   return `## Agent Context\n\n${file.content.trim()}`;
 }
 
-export function formatLinkedFilesBlock(files: LoadedFile[]): string {
+export function formatContextFilesBlock(files: LoadedFile[]): string {
   if (files.length === 0) return "";
   const escape = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
   const lines = [
-    "## On-Demand Files\n",
-    "<on-demand-files>",
-    "  <load-rule>",
-    "    IF the current task requires knowledge described in a file below → call the read tool on that file before proceeding.",
-    "    IF no description matches the task → skip all files.",
-    "  </load-rule>",
-    "  <available_files>",
+    "<context-files>",
+    "  <instruction>If the current task requires knowledge from a file below, call the read tool on it before proceeding. Skip files whose description does not match the task.</instruction>",
+    "  <available>",
     ...files.flatMap(f => [
       "    <file>",
       `      <path>${escape(f.filePath)}</path>`,
       `      <description>${escape(f.description)}</description>`,
       "    </file>",
     ]),
-    "  </available_files>",
-    "</on-demand-files>",
+    "  </available>",
+    "</context-files>",
   ];
   return lines.join("\n");
 }

@@ -1,6 +1,6 @@
 # pi-context
 
-Two [pi](https://github.com/badlogic/pi-mono) extensions that solve SSH context blindness and flat context scaling.
+Three [pi](https://github.com/badlogic/pi-mono) extensions that solve SSH context blindness and automatic context file discovery.
 
 ## Extensions
 
@@ -15,54 +15,63 @@ This extension replicates pi's full resource loading pipeline on the remote mach
 - Loads `APPEND_SYSTEM.md` from same locations → appended at the very end
 
 **Layer 1 — project context:**
-- Walks up from remote cwd to root collecting `AGENTS.md` / `CLAUDE.md` (exact uppercase) → injected as `# Project Context`; at each level checks the directory directly and inside each config subdir (`.pi/`, `.claude/`, `.agents/`)
+- Walks up from remote cwd to root collecting `AGENTS.md` / `CLAUDE.md` (case-insensitive) → injected as `# Project Context`; at each level checks the directory directly and inside each config subdir (`.pi/`, `.claude/`, `.agents/`)
 - Also checks `~/.pi/agent/AGENTS.md` (or `CLAUDE.md`) as the global user context file, loaded first
-
-**Skills — via `resources_discover`:**
-- Exposes remote skill paths to pi's native loader so they appear in the debug panel and as `/skill:name` commands
-- Checks `.pi/skills/`, `.claude/skills/`, `.agents/skills/` at cwd, plus `.agents/skills/` in every ancestor up to the git root
-- Git root is resolved relative to the remote cwd (not the SSH session's home dir)
 
 No-ops when `--ssh` is not active — pi handles local loading natively.
 
 ---
 
-### 2. `context-graph` — Link-following context graph (layer 2)
+### 2. `ssh-skills` — Remote skill mirroring
 
-Pi's native `AGENTS.md` / `CLAUDE.md` mechanism loads files flat into the system prompt unconditionally. This works for small projects but bloats the context window as your knowledge base grows.
+Mirrors remote skill directories into a local temp folder so pi can load them natively (debug panel, `/skill:name` commands).
 
-Instead, you create a **context graph** rooted at `<config-dir>/agents.md`:
+- Fetches skills from `~/.pi/agent/skills/`, `~/.agents/skills/`, `.pi/skills/`, `.claude/skills/`, `.agents/skills/` on the remote
+- Writes only `SKILL.md` content locally — sub-files (references, scripts) stay on the remote and are read there by the agent when needed
+- Temp dir is cleaned up on session shutdown
+
+No-ops when `--ssh` is not active.
+
+---
+
+### 3. `context-files` — Auto-discovery of context files (layer 2)
+
+Pi's native `AGENTS.md` mechanism loads files flat into the system prompt unconditionally. This works for small projects but bloats the context window as your knowledge base grows.
+
+Instead, drop any `.md` file with a `description` frontmatter field into a config dir and it is automatically available to the agent on demand — no links or index files to maintain.
 
 ```
-.pi/               # or .claude/ or .agents/
-├── agents.md      ← entry point, always fully loaded
-├── git.md         ← linked from agents.md → stub only
-├── ssh.md         ← linked from agents.md → stub only
-└── deployment/
-    └── prod.md    ← linked from ssh.md → stub only (recursive)
+.pi/
+├── AGENTS.md          ← always fully loaded (core instructions)
+├── review.md          ← auto-discovered → available on demand
+├── deploy.md          ← auto-discovered → available on demand
+└── architecture/
+    └── overview.md    ← auto-discovered (subdirs scanned recursively)
 ```
 
 **How it works:**
 
-1. `agents.md` is loaded fully into the system prompt — write your agent's role, core instructions, and project overview here.
-2. Every markdown link in `agents.md` is followed. Each linked file is read for its `description` frontmatter only and added as a stub under `## Available Content Files`.
-3. Link-following is recursive — linked files can link to more files, all becoming stubs. A visited set and max-depth of 10 guard against cycles.
-4. The agent calls the `read` tool on any file when it decides the content is relevant. The LLM acts as the relevance filter.
+1. `AGENTS.md` is fully loaded into the system prompt by pi natively.
+2. The extension scans `.pi/`, `.claude/`, and `.agents/` subdirs of each loaded context file's directory for `.md` files with a `description` frontmatter field.
+3. Discovered files are injected as a `<context-files>` XML block — path and description only (no content).
+4. The agent calls the `read` tool on any file when the task matches its description. The LLM acts as the relevance filter.
 
 Works both locally and over SSH.
 
 **File contract:**
 
-Every linked file MUST have a `description` frontmatter field:
+Every context file must have a `description` frontmatter field. Write it as a trigger condition — "Load when..." — so the agent knows exactly when to read it:
 
 ```markdown
 ---
-description: Use this file when deploying to staging or production.
+description: Load when doing a code review. Contains the review checklist and merge criteria.
 ---
 
-## Deployment guide
+## Code review checklist
 ...
 ```
+
+Files without a `description` are ignored. The `skills/` subdirectory is skipped automatically.
 
 **Supported config directories** (tried in order): `.pi`, `.claude`, `.agents`
 
@@ -81,22 +90,23 @@ Works automatically once installed. No configuration needed.
 For SSH usage, combine with pi's `--ssh` flag:
 
 ```bash
-pi --ssh user@host
-pi --ssh user@host:/remote/path
+pi --ssh user@host:~/project
+pi --ssh user@host:/absolute/path
 ```
 
 ## Project structure
 
 ```
 extensions/
-  ssh-context.ts     # SSH parity extension (layers 0 & 1)
-  context-graph.ts   # Link-following context graph (layer 2)
+  ssh-context.ts      # SSH parity extension (layers 0 & 1)
+  ssh-skills.ts       # Remote skill mirroring
+  context-files.ts    # Auto-discovery of context files (layer 2)
 src/
-  fs-ops.ts          # Shared local + SSH filesystem abstraction
-  ssh.ts             # Shared SSH flag parsing and state resolution
-  markdown.ts        # Shared frontmatter parsing and link extraction
-  loader.ts          # Shared file discovery and loading logic
+  fs-ops.ts           # Shared local + SSH filesystem abstraction
+  ssh.ts              # Shared SSH flag parsing and state resolution
+  markdown.ts         # Shared frontmatter parsing
+  loader.ts           # Shared file discovery and loading logic
 test/
-  loader.test.ts     # Unit tests for loader utilities
-  context-graph.test.ts  # Integration tests for context-graph extension
+  loader.test.ts      # Unit tests for loader utilities
+  context-files.test.ts  # Integration tests for context-files extension
 ```

@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import contextFiles, { extractContextFilesFromSystemPrompt } from "../extensions/context-files.js";
+import contextFiles from "../extensions/context-files.js";
 
 type BeforeAgentStartHandler = (event: { systemPrompt: string }, ctx: { cwd: string }) => Promise<{ systemPrompt: string } | undefined>;
 
@@ -21,55 +21,7 @@ function createBeforeAgentStartHandler(): BeforeAgentStartHandler {
   return handler;
 }
 
-
-describe("extractContextFilesFromSystemPrompt", () => {
-  it("extracts path and content from ## /path sections", () => {
-    const prompt = [
-      "Base system",
-      "",
-      "## /repo/AGENTS.md",
-      "",
-      "Some content here",
-      "[link](file.md)",
-      "",
-      "## /repo/.pi/AGENTS.md",
-      "Nested content",
-    ].join("\n");
-    const files = extractContextFilesFromSystemPrompt(prompt);
-    expect(files).toHaveLength(2);
-    expect(files[0].path).toBe("/repo/AGENTS.md");
-    expect(files[0].content).toContain("Some content here");
-    expect(files[0].content).toContain("[link](file.md)");
-    expect(files[1].path).toBe("/repo/.pi/AGENTS.md");
-    expect(files[1].content).toBe("Nested content");
-  });
-
-  it("treats ## headings within content that are not file paths as content", () => {
-    const prompt = [
-      "## /repo/AGENTS.md",
-      "",
-      "## Overview",
-      "Not a file path heading",
-    ].join("\n");
-    const files = extractContextFilesFromSystemPrompt(prompt);
-    expect(files).toHaveLength(1);
-    expect(files[0].content).toContain("## Overview");
-    expect(files[0].content).toContain("Not a file path heading");
-  });
-
-  it("returns empty array when no file path headings found", () => {
-    expect(extractContextFilesFromSystemPrompt("## Overview\nsome content")).toHaveLength(0);
-  });
-
-  it("handles Windows CRLF line endings", () => {
-    const prompt = "## /repo/AGENTS.md\r\nsome content\r\n";
-    const files = extractContextFilesFromSystemPrompt(prompt);
-    expect(files).toHaveLength(1);
-    expect(files[0].content).toBe("some content");
-  });
-});
-
-describe("context-graph before_agent_start", () => {
+describe("context-files before_agent_start", () => {
   const tempDirs: string[] = [];
 
   afterEach(() => {
@@ -78,79 +30,152 @@ describe("context-graph before_agent_start", () => {
     }
   });
 
-  it("discovers .md files with descriptions from .pi/ without explicit links", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "pi-context-graph-"));
+  it("discovers .md files with descriptions from .pi/", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "pi-context-files-"));
     tempDirs.push(dir);
 
-    const rootPath = join(dir, "AGENTS.md");
     const piDir = join(dir, ".pi");
-    const reviewPath = join(piDir, "review.md");
-
     mkdirSync(piDir, { recursive: true });
-    writeFileSync(rootPath, "# Instructions\nFollow the review process.", "utf8");
+    writeFileSync(join(dir, "AGENTS.md"), "# Instructions", "utf8");
     writeFileSync(
-      reviewPath,
+      join(piDir, "review.md"),
       ["---", "description: Code review playbook.", "---", "# Review"].join("\n"),
       "utf8",
     );
 
     const handler = createBeforeAgentStartHandler();
     const result = await handler(
-      {
-        systemPrompt: [
-          "Base system prompt",
-          "",
-          "# Project Context",
-          "",
-          `## ${rootPath}`,
-          "# Instructions",
-          "Follow the review process.",
-        ].join("\n"),
-      },
+      { systemPrompt: "Base system prompt" },
       { cwd: dir },
     );
 
     expect(result?.systemPrompt).toContain("<context-files>");
-    expect(result?.systemPrompt).toContain(reviewPath);
+    expect(result?.systemPrompt).toContain(join(piDir, "review.md"));
     expect(result?.systemPrompt).toContain("Code review playbook.");
   });
 
   it("skips config dir files without a description field", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "pi-context-graph-"));
+    const dir = mkdtempSync(join(tmpdir(), "pi-context-files-"));
     tempDirs.push(dir);
 
-    const rootPath = join(dir, "AGENTS.md");
     const piDir = join(dir, ".pi");
-
     mkdirSync(piDir, { recursive: true });
-    writeFileSync(rootPath, "# Root", "utf8");
+    writeFileSync(join(dir, "AGENTS.md"), "# Root", "utf8");
     writeFileSync(join(piDir, "nodesc.md"), "# No description frontmatter", "utf8");
 
     const handler = createBeforeAgentStartHandler();
     const result = await handler(
-      {
-        systemPrompt: [`## ${rootPath}`, "# Root"].join("\n"),
-      },
+      { systemPrompt: "Base system prompt" },
       { cwd: dir },
     );
 
     expect(result).toBeUndefined();
   });
 
-  it("returns undefined when no path-based root files exist in system prompt", async () => {
+  it("returns undefined when no AGENTS.md found walking up from cwd", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "pi-context-files-empty-"));
+    tempDirs.push(dir);
+
     const handler = createBeforeAgentStartHandler();
     const result = await handler(
-      {
-        systemPrompt: [
-          "Base system prompt",
-          "",
-          "## Overview",
-          "No file path headings here",
-        ].join("\n"),
-      },
-      { cwd: process.cwd() },
+      { systemPrompt: "Base system prompt" },
+      { cwd: dir },
     );
 
     expect(result).toBeUndefined();
+  });
+
+  it("scans .claude/ and .agents/ config dirs", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "pi-context-files-"));
+    tempDirs.push(dir);
+
+    mkdirSync(join(dir, ".claude"), { recursive: true });
+    mkdirSync(join(dir, ".agents"), { recursive: true });
+    writeFileSync(join(dir, "AGENTS.md"), "# Root", "utf8");
+    writeFileSync(
+      join(dir, ".claude", "style.md"),
+      ["---", "description: Code style guide.", "---"].join("\n"),
+      "utf8",
+    );
+    writeFileSync(
+      join(dir, ".agents", "deploy.md"),
+      ["---", "description: Deploy runbook.", "---"].join("\n"),
+      "utf8",
+    );
+
+    const handler = createBeforeAgentStartHandler();
+    const result = await handler(
+      { systemPrompt: "Base system prompt" },
+      { cwd: dir },
+    );
+
+    expect(result?.systemPrompt).toContain("Code style guide.");
+    expect(result?.systemPrompt).toContain("Deploy runbook.");
+  });
+
+  it("recursively discovers files in subdirectories", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "pi-context-files-"));
+    tempDirs.push(dir);
+
+    const subDir = join(dir, ".pi", "architecture");
+    mkdirSync(subDir, { recursive: true });
+    writeFileSync(join(dir, "AGENTS.md"), "# Root", "utf8");
+    writeFileSync(
+      join(subDir, "overview.md"),
+      ["---", "description: Architecture overview.", "---"].join("\n"),
+      "utf8",
+    );
+
+    const handler = createBeforeAgentStartHandler();
+    const result = await handler(
+      { systemPrompt: "Base system prompt" },
+      { cwd: dir },
+    );
+
+    expect(result?.systemPrompt).toContain("Architecture overview.");
+  });
+
+  it("skips files in skills/ subdirectory", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "pi-context-files-"));
+    tempDirs.push(dir);
+
+    const skillsDir = join(dir, ".pi", "skills", "my-skill");
+    mkdirSync(skillsDir, { recursive: true });
+    writeFileSync(join(dir, "AGENTS.md"), "# Root", "utf8");
+    writeFileSync(
+      join(skillsDir, "SKILL.md"),
+      ["---", "description: A skill.", "---"].join("\n"),
+      "utf8",
+    );
+
+    const handler = createBeforeAgentStartHandler();
+    const result = await handler(
+      { systemPrompt: "Base system prompt" },
+      { cwd: dir },
+    );
+
+    expect(result).toBeUndefined();
+  });
+
+  it("uses AGENTS.md in .pi/ as project root correctly", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "pi-context-files-"));
+    tempDirs.push(dir);
+
+    const piDir = join(dir, ".pi");
+    mkdirSync(piDir, { recursive: true });
+    writeFileSync(join(piDir, "AGENTS.md"), "# Root", "utf8");
+    writeFileSync(
+      join(piDir, "review.md"),
+      ["---", "description: Review guide.", "---"].join("\n"),
+      "utf8",
+    );
+
+    const handler = createBeforeAgentStartHandler();
+    const result = await handler(
+      { systemPrompt: "Base system prompt" },
+      { cwd: dir },
+    );
+
+    expect(result?.systemPrompt).toContain("Review guide.");
   });
 });

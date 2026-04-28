@@ -18,6 +18,8 @@ This extension replicates pi's full resource loading pipeline on the remote mach
 - Walks up from remote cwd to root collecting `AGENTS.md` / `CLAUDE.md` (case-insensitive) → injected as `# Project Context`; at each level checks the directory directly and inside each config subdir (`.pi/`, `.claude/`, `.agents/`)
 - Also checks `~/.pi/agent/AGENTS.md` (or `CLAUDE.md`) as the global user context file, loaded first
 
+SSH state resolution errors are surfaced directly in the system prompt so failures are visible rather than silent.
+
 No-ops when `--ssh` is not active — pi handles local loading natively.
 
 ---
@@ -26,9 +28,15 @@ No-ops when `--ssh` is not active — pi handles local loading natively.
 
 Mirrors remote skill directories into a local temp folder so pi can load them natively (debug panel, `/skill:name` commands).
 
-- Fetches skills from `~/.pi/agent/skills/`, `~/.agents/skills/`, `.pi/skills/`, `.claude/skills/`, `.agents/skills/` on the remote
-- Writes only `SKILL.md` content locally — sub-files (references, scripts) stay on the remote and are read there by the agent when needed
-- Temp dir is cleaned up on session shutdown
+**Remote skills** (from `~/.pi/agent/skills/`, `~/.agents/skills/`, `.pi/skills/`, etc.):
+- SKILL.md is written locally so pi discovers it natively
+- Relative links in SKILL.md are rewritten to absolute remote paths — the agent reads `references/`, `assets/` directly from the remote machine via SSH
+
+**Local Windows global skills** (`~/.pi/agent/skills/`):
+- Sub-files (`references/`, `assets/`, `scripts/`) are uploaded to a remote temp dir at session start
+- SKILL.md is written locally with links rewritten to those remote paths
+- Remote skills take priority on name collision
+- Remote temp dir is cleaned up on session shutdown
 
 No-ops when `--ssh` is not active.
 
@@ -51,8 +59,8 @@ Instead, drop any `.md` file with a `description` frontmatter field into a confi
 
 **How it works:**
 
-1. `AGENTS.md` is fully loaded into the system prompt by pi natively.
-2. The extension scans `.pi/`, `.claude/`, and `.agents/` subdirs of each loaded context file's directory for `.md` files with a `description` frontmatter field.
+1. The extension locates the project root — locally via `ctx.cwd`, over SSH via the resolved remote cwd.
+2. It scans `.pi/`, `.claude/`, and `.agents/` subdirs for `.md` files with a `description` frontmatter field.
 3. Discovered files are injected as a `<context-files>` XML block — path and description only (no content).
 4. The agent calls the `read` tool on any file when the task matches its description. The LLM acts as the relevance filter.
 
@@ -60,7 +68,7 @@ Works both locally and over SSH.
 
 **File contract:**
 
-Every context file must have a `description` frontmatter field. Write it as a trigger condition — "Load when..." — so the agent knows exactly when to read it:
+Every context file must have a `description` frontmatter field. Write it as a trigger condition so the agent knows exactly when to read it:
 
 ```markdown
 ---
@@ -71,7 +79,7 @@ description: Load when doing a code review. Contains the review checklist and me
 ...
 ```
 
-Files without a `description` are ignored. The `skills/` subdirectory is skipped automatically.
+Files without a `description` are ignored. The `skills/` subdirectory is skipped automatically (prevents SKILL.md files from being picked up).
 
 **Supported config directories** (tried in order): `.pi`, `.claude`, `.agents`
 
@@ -99,7 +107,7 @@ pi --ssh user@host:/absolute/path
 ```
 extensions/
   ssh-context.ts      # SSH parity extension (layers 0 & 1)
-  ssh-skills.ts       # Remote skill mirroring
+  ssh-skills.ts       # Remote skill mirroring + local skill upload
   context-files.ts    # Auto-discovery of context files (layer 2)
 src/
   fs-ops.ts           # Shared local + SSH filesystem abstraction
